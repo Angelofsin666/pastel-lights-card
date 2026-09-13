@@ -74,3 +74,25 @@ icona, entità e colore.
   `homeassistant.turn_off`, compatibile con qualsiasi dominio `light.*`.
 - Il rilevamento "dimmerabile" si basa sull'attributo
   `supported_color_modes` dell'entità (standard HA per le luci moderne).
+
+## Interazioni touch e accessibilità
+
+- Lo scorrimento annulla il tocco e la pressione prolungata: il popup si apre
+  solo mantenendo il dito fermo per circa mezzo secondo. Anche l'annullamento
+  del gesto da parte del browser interrompe la pressione.
+- Il titolo mantiene il comando per tutte le luci, con la stessa protezione
+  dagli scorrimenti accidentali.
+- Sopra lo slider si può scorrere verticalmente; trascinando orizzontalmente
+  si vede l'anteprima della luminosità, inviata alla luce una sola volta al
+  rilascio. Un gesto annullato non invia comandi.
+- Da tastiera: Tab seleziona i controlli, Invio/Spazio attiva le righe o il
+  titolo; le frecce regolano lo slider di 5 punti, Home/End impostano 1/100%.
+- Il ritocco grafico mantiene gli otto colori: icona del titolo su fondo
+  pastello, stati in piccoli badge, ombre più leggere e slider più facile
+  da toccare. Non richiede modifiche alla configurazione YAML.
+
+### Verifica per lo sviluppo
+
+Esegui `node --test tests/gestures.test.cjs` per le regressioni dei gesti.
+I test usano servizi Home Assistant simulati; prima del rilascio verifica
+lo scroll e la pressione lunga anche su un dispositivo touch reale.

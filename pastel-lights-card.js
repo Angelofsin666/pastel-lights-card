@@ -172,48 +172,108 @@ class PastelLightsCard extends LitElement {
     });
   }
 
-  // -- long press handling ----------------------------------------------
+  // A press is valid only while the same pointer stays within 10 CSS pixels.
+  _cancelPress() {
+    clearTimeout(this._pressTimer);
+    this._press = null;
+  }
 
   _onPointerDown(id, ev) {
-    this._pressTimer = setTimeout(() => {
-      this._longPressed = true;
-      this._showMoreInfo(id, ev);
+    this._cancelPress();
+    if (ev.isPrimary === false || ev.button !== 0) return;
+    this._press = { id, pointerId: ev.pointerId, x: ev.clientX, y: ev.clientY, held: false };
+    if (id) this._pressTimer = setTimeout(() => {
+      if (!this._press) return;
+      this._press.held = true;
+      this._showMoreInfo(id);
     }, 500);
-    this._longPressed = false;
+  }
+
+  _onPointerMove(ev) {
+    const p = this._press;
+    if (p && p.pointerId === ev.pointerId &&
+        Math.hypot(ev.clientX - p.x, ev.clientY - p.y) > 10) this._cancelPress();
   }
 
   _onPointerUp(id, ev) {
-    clearTimeout(this._pressTimer);
-    if (!this._longPressed) {
-      this._toggleEntity(id, ev);
-    }
+    this._onPointerMove(ev);
+    const p = this._press;
+    this._cancelPress();
+    if (!p || p.id !== id || p.pointerId !== ev.pointerId || p.held) return;
+    if (id) this._toggleEntity(id, ev);
+    else this._toggleAll();
   }
 
-  _onPointerLeave() {
-    clearTimeout(this._pressTimer);
+  _onKeyDown(id, ev) {
+    if (ev.repeat || !["Enter", " "].includes(ev.key)) return;
+    ev.preventDefault();
+    if (id) this._toggleEntity(id, ev);
+    else this._toggleAll();
   }
 
-  // -- slider drag ---------------------------------------------------------
+  disconnectedCallback() {
+    this._cancelPress();
+    if (this._sliderCleanup) this._sliderCleanup();
+    super.disconnectedCallback();
+  }
 
+  // Let vertical touch gestures scroll. Commit brightness only on release.
   _onSliderPointerDown(id, ev) {
     ev.stopPropagation();
+    this._cancelPress();
+    if (this._sliderCleanup) this._sliderCleanup();
+    if (ev.isPrimary === false || ev.button !== 0) return;
     const track = ev.currentTarget;
-    const update = (clientX) => {
-      const rect = track.getBoundingClientRect();
-      const pct = Math.min(100, Math.max(1, ((clientX - rect.left) / rect.width) * 100));
-      this._setBrightness(id, pct);
+    const rect = track.getBoundingClientRect();
+    let pct = this._brightnessPct(id);
+    let dragging = false;
+    const update = (x) => {
+      pct = Math.round(Math.min(100, Math.max(1, ((x - rect.left) / rect.width) * 100)));
+      track.style.setProperty("--slider-value", `${pct}%`);
+      track.setAttribute("aria-valuenow", pct);
     };
-    update(ev.clientX !== undefined ? ev.clientX : ev.touches[0].clientX);
-
-    const move = (mv) => {
-      update(mv.clientX !== undefined ? mv.clientX : mv.touches[0].clientX);
-    };
-    const up = () => {
+    const cleanup = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("blur", cleanup);
+      track.style.removeProperty("--slider-value");
+      track.setAttribute("aria-valuenow", this._brightnessPct(id));
+      this._sliderCleanup = null;
     };
+    const move = (e) => {
+      if (e.pointerId !== ev.pointerId) return;
+      const dx = Math.abs(e.clientX - ev.clientX);
+      const dy = Math.abs(e.clientY - ev.clientY);
+      if (!dragging && dy > 10 && dy >= dx) { cleanup(); return; }
+      if (dx > 10) dragging = true;
+      if (dragging) update(e.clientX);
+    };
+    const up = (e) => {
+      if (e.pointerId !== ev.pointerId) return;
+      const dx = Math.abs(e.clientX - ev.clientX);
+      const dy = Math.abs(e.clientY - ev.clientY);
+      if (!dragging && dy > 10) { cleanup(); return; }
+      update(e.clientX);
+      cleanup();
+      this._setBrightness(id, pct);
+    };
+    const cancel = (e) => { if (e.pointerId === ev.pointerId) cleanup(); };
+    this._sliderCleanup = cleanup;
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
+    window.addEventListener("blur", cleanup);
+  }
+
+  _onSliderKeyDown(id, ev) {
+    const delta = { ArrowRight: 5, ArrowUp: 5, ArrowLeft: -5, ArrowDown: -5 }[ev.key];
+    if (delta === undefined && !["Home", "End"].includes(ev.key)) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const pct = ev.key === "Home" ? 1 : ev.key === "End" ? 100 :
+      Math.min(100, Math.max(1, this._brightnessPct(id) + delta));
+    this._setBrightness(id, pct);
   }
 
   // -- render --------------------------------------------------------------
@@ -232,7 +292,15 @@ class PastelLightsCard extends LitElement {
     return html`
       <ha-card style="--c-base:${colors.base}; --c-light:${colors.light}; --c-bg:${colors.bg}; --c-glow:${colors.glow}; --c-text:${colors.text};">
 
-        <div class="header" @click=${() => this._toggleAll()}>
+        <div class="header" role="button" tabindex="0"
+          aria-label=${anyOn ? "Spegni tutte le luci" : "Accendi tutte le luci"}
+          @pointerdown=${(e) => this._onPointerDown(null, e)}
+          @pointermove=${(e) => this._onPointerMove(e)}
+          @pointerup=${(e) => this._onPointerUp(null, e)}
+          @pointercancel=${() => this._cancelPress()}
+          @pointerleave=${() => this._cancelPress()}
+          @keydown=${(e) => this._onKeyDown(null, e)}>
+
           <ha-icon icon=${this.config.icon} style="color:${colors.base}"></ha-icon>
           <div class="header-text">
             <div class="title">${this.config.title}</div>
@@ -271,10 +339,15 @@ class PastelLightsCard extends LitElement {
             return html`
               <div>
                 <div
-                  class="row ${dimmable ? "expanded" : ""}"
+                  class="row ${dimmable ? "expanded" : ""} ${isOn ? "is-on" : ""}"
+                  role="button" tabindex="0" aria-pressed=${isOn}
+                  aria-label=${`${label}: ${isOn ? "spegni" : "accendi"}`}
+                  @keydown=${(e) => this._onKeyDown(id, e)}
+                  @pointermove=${(e) => this._onPointerMove(e)}
+                  @pointercancel=${() => this._cancelPress()}
                   @pointerdown=${(e) => this._onPointerDown(id, e)}
                   @pointerup=${(e) => this._onPointerUp(id, e)}
-                  @pointerleave=${() => this._onPointerLeave()}
+                  @pointerleave=${() => this._cancelPress()}
                 >
                   <ha-icon icon=${icon} style="color:${isOn ? colors.text : "var(--secondary-text-color)"}"></ha-icon>
                   <span class="row-label ${isOn ? "" : "row-label-off"}">${label}</span>
@@ -284,9 +357,12 @@ class PastelLightsCard extends LitElement {
                 </div>
                 ${dimmable ? html`
                   <div class="slider-wrap">
-                    <div class="slider-track" @pointerdown=${(e) => this._onSliderPointerDown(id, e)}>
-                      <div class="slider-fill" style="width:${briPct}%"></div>
-                      <div class="slider-thumb" style="left:${briPct}%"></div>
+                    <div class="slider-track" role="slider" tabindex="0"
+                      aria-label=${`Luminosità ${label}`} aria-valuemin="1" aria-valuemax="100" aria-valuenow=${briPct}
+                      @keydown=${(e) => this._onSliderKeyDown(id, e)}
+                      @pointerdown=${(e) => this._onSliderPointerDown(id, e)}>
+                      <div class="slider-fill" style="width:var(--slider-value, ${briPct}%)"></div>
+                      <div class="slider-thumb" style="left:var(--slider-value, ${briPct}%)"></div>
                     </div>
                   </div>
                 ` : ""}
@@ -308,7 +384,8 @@ class PastelLightsCard extends LitElement {
       ha-card {
         border-radius: 28px;
         background: var(--ha-card-background, #ffffff);
-        box-shadow: 0 2px 8px rgba(0,0,0,0.06), 0 12px 40px rgba(0,0,0,0.08);
+        border: 1px solid var(--divider-color, rgba(0,0,0,0.06));
+        box-shadow: 0 3px 8px rgba(0,0,0,0.03), 0 10px 28px rgba(0,0,0,0.05);
         padding: 4px;
         overflow: hidden;
       }
@@ -316,12 +393,16 @@ class PastelLightsCard extends LitElement {
         display: flex;
         align-items: center;
         gap: 10px;
-        padding: 12px 14px 6px;
+        padding: 14px 16px 10px;
+        touch-action: pan-y;
         cursor: pointer;
         user-select: none;
       }
       .header ha-icon {
         --mdc-icon-size: 22px;
+        padding: 10px;
+        border-radius: 14px;
+        background: var(--c-bg);
       }
       .title {
         font-size: 18px;
@@ -353,13 +434,16 @@ class PastelLightsCard extends LitElement {
       }
       .count {
         font-size: 48px;
-        font-weight: 300;
+        font-weight: 400;
+        font-variant-numeric: tabular-nums;
         color: var(--c-base);
         line-height: 1;
         letter-spacing: -1px;
       }
       .count-total {
         font-size: 22px;
+        opacity: 0.65;
+        margin-left: 3px;
       }
       .count-label {
         font-size: 12px;
@@ -386,10 +470,20 @@ class PastelLightsCard extends LitElement {
         align-items: center;
         gap: 12px;
         padding: 13px 12px;
+        min-height: 28px;
+        touch-action: pan-y;
         border-radius: 16px;
         cursor: pointer;
         user-select: none;
         -webkit-tap-highlight-color: transparent;
+      }
+      .header:focus-visible, .row:focus-visible, .slider-track:focus-visible {
+        outline: 2px solid var(--c-text);
+        outline-offset: -2px;
+      }
+      .row.is-on .row-status { background: var(--c-light); }
+      @media (prefers-reduced-motion: reduce) {
+        .progress-fill { transition: none; }
       }
       .row.expanded {
         padding-bottom: 14px;
@@ -406,13 +500,20 @@ class PastelLightsCard extends LitElement {
         font-weight: 500;
         color: var(--primary-text-color);
         flex: 1;
+        min-width: 0;
+        overflow-wrap: anywhere;
       }
       .row-label-off {
         opacity: 0.65;
       }
       .row-status {
-        font-size: 13px;
+        font-size: 12px;
         font-weight: 600;
+        flex-shrink: 0;
+        font-variant-numeric: tabular-nums;
+        padding: 5px 8px;
+        border-radius: 9px;
+        background: rgba(255,255,255,0.4);
       }
       .row.missing {
         color: var(--error-color, red);
@@ -425,19 +526,19 @@ class PastelLightsCard extends LitElement {
         margin: 0 14px;
       }
       .slider-wrap {
-        padding: 0 14px 4px 48px;
+        padding: 0 22px 4px 48px;
       }
       .slider-track {
         position: relative;
-        height: 8px;
+        height: 36px;
         border-radius: 4px;
-        background: var(--c-light);
+        background: linear-gradient(var(--c-light), var(--c-light)) center / 100% 8px no-repeat;
         cursor: pointer;
-        touch-action: none;
+        touch-action: pan-y;
       }
       .slider-fill {
         position: absolute;
-        top: 0; left: 0; bottom: 0;
+        top: 14px; left: 0; height: 8px;
         border-radius: 4px;
         background: linear-gradient(90deg, var(--c-light), var(--c-base));
       }
